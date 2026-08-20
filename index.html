@@ -4,8 +4,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>輕聲詞語聽辨</title>
+    
+    <!-- PWA 相關設定 -->
+    <meta name="theme-color" content="#26a69a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="輕聲詞語">
+    <link rel="apple-touch-icon" href="icon.png">
+    
+    <!-- 動態生成 Manifest 以確保單一檔案即可運作 -->
+    <script>
+        const manifestData = {
+            "name": "輕聲詞語聽辨",
+            "short_name": "輕聲詞語",
+            "start_url": "./index.html",
+            "display": "standalone",
+            "background_color": "#e0f7fa",
+            "theme_color": "#26a69a",
+            "icons": [
+                {
+                    "src": "icon.png",
+                    "sizes": "192x192",
+                    "type": "image/png"
+                }
+            ]
+        };
+        const stringManifest = JSON.stringify(manifestData);
+        const blob = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blob);
+        document.write('<link rel="manifest" href="' + manifestURL + '">');
+    </script>
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap'); /* 替代台灣圓體之可愛字體，並備用系統圓體 */
+        @import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap');
 
         * {
             box-sizing: border-box;
@@ -26,7 +57,6 @@
             overflow: hidden;
         }
 
-        /* 標題固定在右上角 */
         .game-title {
             position: fixed;
             top: 15px;
@@ -121,7 +151,6 @@
             display: none !important;
         }
 
-        /* 兔子動畫與恭喜畫面 */
         .congrats-box {
             animation: bounce 1s infinite alternate;
         }
@@ -139,7 +168,6 @@
 </head>
 <body>
 
-    <!-- 游戲標題在右上角 -->
     <div class="game-title">輕聲詞語聽辨</div>
 
     <div class="game-container">
@@ -151,6 +179,9 @@
                 請在 3 分鐘內完成挑戰，聽音選出正確的輕聲詞語。
             </p>
             <button class="btn" onclick="startGame()">開始遊戲</button>
+            <div id="install-container" class="hidden" style="margin-top: 15px;">
+                <button class="btn" id="install-btn" style="background-color: #00838f;">📲 安裝到手機桌面</button>
+            </div>
         </div>
 
         <!-- 遊戲進行畫面 -->
@@ -165,9 +196,7 @@
             
             <div class="feedback" id="feedback-icon"></div>
 
-            <div class="options-grid" id="options-container">
-                <!-- 選項由 JS 動態生成 -->
-            </div>
+            <div class="options-grid" id="options-container"></div>
         </div>
 
         <!-- 結束畫面 -->
@@ -180,7 +209,53 @@
     </div>
 
     <script>
-        // 20個輕聲詞語庫
+        // PWA Service Worker 註冊
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swCode = `
+                    self.addEventListener('install', e => {
+                        e.waitUntil(self.skipWaiting());
+                    });
+                    self.addEventListener('activate', e => {
+                        e.waitUntil(self.clients.claim());
+                    });
+                    self.addEventListener('fetch', e => {
+                        e.respondWith(
+                            caches.match(e.request).then(response => {
+                                return response || fetch(e.request);
+                            }).catch(() => {})
+                        );
+                    });
+                `;
+                const blobSW = new Blob([swCode], {type: 'application/javascript'});
+                const swUrl = URL.createObjectURL(blobSW);
+                
+                navigator.serviceWorker.register(swUrl)
+                    .then(() => console.log('PWA Service Worker 註冊成功'))
+                    .catch(err => console.log('PWA 註冊失敗', err));
+            });
+        }
+
+        // 攔截安裝事件 (Android / Chrome)
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('install-container').classList.remove('hidden');
+        });
+
+        document.getElementById('install-btn').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    document.getElementById('install-container').classList.add('hidden');
+                }
+                deferredPrompt = null;
+            }
+        });
+
+        // 遊戲核心邏輯
         const wordList = [
             { word: "莊稼", pinyin: "zhuāng jia" },
             { word: "雲彩", pinyin: "yún cai" },
@@ -204,23 +279,21 @@
             { word: "耳朵", pinyin: "ěr duo" }
         ];
 
-        // 混淆選項庫（模擬非輕聲或相似詞語）
-        const decoyPool = ["花兒", "貓兒", "桌子", "椅子", "石頭", "明白", "蘿蔔", "蘑菇", "明白", "乾淨"];
+        const decoyPool = ["花兒", "貓兒", "桌子", "椅子", "石頭", "明白", "蘿蔔", "蘑菇", "乾淨"];
 
         let currentIndex = 0;
         let score = 0;
-        let timeLeft = 180; // 3分鐘
+        let timeLeft = 180;
         let timerInterval = null;
         let shuffledQuestions = [];
         let currentCorrectWord = "";
         let lockClick = false;
 
         function startGame() {
-            // 重置狀態
             currentIndex = 0;
             score = 0;
             timeLeft = 180;
-            shuffledQuestions = [...wordList].sort(() => Math.random() - 0.5); // 打亂順序
+            shuffledQuestions = [...wordList].sort(() => Math.random() - 0.5);
 
             document.getElementById('start-screen').classList.add('hidden');
             document.getElementById('end-screen').classList.add('hidden');
@@ -264,7 +337,6 @@
             const currentItem = shuffledQuestions[currentIndex];
             currentCorrectWord = currentItem.word;
 
-            // 生成3-4個選項 (包含正確答案 + 2-3個干擾項)
             let options = [currentCorrectWord];
             while (options.length < 3) {
                 let randomDecoy = decoyPool[Math.floor(Math.random() * decoyPool.length)];
@@ -272,7 +344,6 @@
                     options.push(randomDecoy);
                 }
             }
-            // 打亂選項順序
             options.sort(() => Math.random() - 0.5);
 
             const container = document.getElementById('options-container');
@@ -281,27 +352,25 @@
                 const btn = document.createElement('button');
                 btn.className = 'option-btn';
                 btn.innerText = opt;
-                btn.onclick = () => checkAnswer(opt, btn);
+                btn.onclick = () => checkAnswer(opt);
                 container.appendChild(btn);
             });
 
-            // 自動播放一次聲音
             setTimeout(playCurrentAudio, 300);
         }
 
         function playCurrentAudio() {
             if (!currentCorrectWord) return;
-            // 使用瀏覽器內置語音合成 API 讀出詞語
             if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel(); // 停止先前的發音
+                window.speechSynthesis.cancel();
                 let utterance = new SpeechSynthesisUtterance(currentCorrectWord);
-                utterance.lang = 'zh-CN'; // 普通話發音以準確體現輕聲
-                utterance.rate = 0.9;     // 稍慢便於聽辨
+                utterance.lang = 'zh-CN';
+                utterance.rate = 0.9;
                 window.speechSynthesis.speak(utterance);
             }
         }
 
-        function checkAnswer(selectedOpt, btnElement) {
+        function checkAnswer(selectedOpt) {
             if (lockClick) return;
             lockClick = true;
 
@@ -318,7 +387,7 @@
                 }, 1200);
             } else {
                 feedback.innerText = "❌";
-                playCurrentAudio(); // 答錯重複播放
+                playCurrentAudio();
                 setTimeout(() => {
                     lockClick = false;
                     feedback.innerText = "";
