@@ -1,32 +1,474 @@
-// 初始化時先載入一次語音清單（iOS 需要這個步驟）
-let systemVoices = [];
-function loadVoices() {
-    if ('speechSynthesis' in window) {
-        systemVoices = window.speechSynthesis.getVoices();
-    }
-}
-loadVoices();
-if ('speechSynthesis' in window && window.speechSynthesis.onvoiceschanged !== undefined) {
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-}
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>輕聲詞語聽辨</title>
+    
+    <!-- PWA 相關設定 -->
+    <meta name="theme-color" content="#26a69a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="輕聲詞語">
+    
+    <!-- 動態生成 Manifest 以確保單一檔案即可運作 -->
+    <script>
+        const manifestData = {
+            "name": "輕聲詞語聽辨",
+            "short_name": "輕聲詞語",
+            "start_url": "./index.html",
+            "display": "standalone",
+            "background_color": "#e0f7fa",
+            "theme_color": "#26a69a",
+            "icons": [
+                {
+                    "src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐰</text></svg>",
+                    "sizes": "192x192",
+                    "type": "image/svg+xml"
+                }
+            ]
+        };
+        const stringManifest = JSON.stringify(manifestData);
+        const blob = new Blob([stringManifest], {type: 'application/json'});
+        const manifestURL = URL.createObjectURL(blob);
+        document.write('<link rel="manifest" href="' + manifestURL + '">');
+    </script>
 
-function playCurrentAudio() {
-    if (!currentCorrectWord) return;
-    if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        let utterance = new SpeechSynthesisUtterance(currentCorrectWord);
-        
-        // 強制在系統語音中尋找普通話（Mandarin）或台灣國語的語音包
-        let targetVoice = systemVoices.find(voice => 
-            voice.lang === 'zh-CN' || voice.lang === 'zh-TW' || voice.lang === 'cmn-CN'
-        );
-        
-        if (targetVoice) {
-            utterance.voice = targetVoice;
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap');
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-user-select: none;
         }
-        
-        utterance.lang = 'zh-CN'; // 雙重保險
-        utterance.rate = 0.9;     // 稍慢便於聽辨
-        window.speechSynthesis.speak(utterance);
-    }
-}
+
+        body {
+            margin: 0;
+            padding: 0;
+            background: linear-gradient(135deg, #e0f7fa, #80deea);
+            font-family: "Microsoft JhengHei", "PingFang TC", "Heiti TC", "ZCOOL KuaiLe", sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 標題固定在右上角 */
+        .game-title {
+            position: fixed;
+            top: 15px;
+            right: 20px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #00796b;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 6px 12px;
+            border-radius: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        .game-container {
+            width: 90%;
+            max-width: 500px;
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+            padding: 25px;
+            text-align: center;
+            position: relative;
+            margin-top: 40px;
+        }
+
+        h1 {
+            color: #00838f;
+            margin-bottom: 10px;
+            font-size: 1.8rem;
+        }
+
+        .stats-bar {
+            display: flex;
+            justify-content: space-between;
+            font-size: 1rem;
+            color: #555;
+            margin-bottom: 20px;
+            background: #f1f8e9;
+            padding: 10px 15px;
+            border-radius: 10px;
+        }
+
+        .btn {
+            background-color: #26a69a;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1.1rem;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(38, 166, 154, 0.4);
+            transition: all 0.2s ease;
+            margin: 10px 0;
+            font-family: inherit;
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        /* 語音按鈕群組 */
+        .audio-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 10px;
+        }
+
+        .audio-btn {
+            flex: 1;
+            padding: 10px;
+            font-size: 1rem;
+            border-radius: 30px;
+            border: none;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.15);
+            font-family: inherit;
+            transition: transform 0.1s;
+        }
+
+        .audio-btn:active {
+            transform: scale(0.95);
+        }
+
+        .options-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .option-btn {
+            background: #e0f2f1;
+            border: 2px solid #b2dfdb;
+            color: #004d40;
+            padding: 15px;
+            font-size: 1.2rem;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+        }
+
+        .option-btn:hover {
+            background: #b2dfdb;
+        }
+
+        .feedback {
+            font-size: 3rem;
+            margin: 15px 0;
+            height: 60px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .congrats-box {
+            animation: bounce 1s infinite alternate;
+        }
+
+        @keyframes bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-10px); }
+        }
+
+        .rabbit-icon {
+            font-size: 5rem;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 游戲標題在右上角 -->
+    <div class="game-title">輕聲詞語聽辨</div>
+
+    <div class="game-container">
+        <!-- 開始畫面 -->
+        <div id="start-screen">
+            <h1>🐰 輕聲詞語聽辨 🌟</h1>
+            <p style="color: #666; line-height: 1.6;">
+                總共 20 道題，每題 5 分，滿分 100 分！<br>
+                請在 3 分鐘內完成挑戰，聽音選出正確的輕聲詞語。
+            </p>
+            <button class="btn" onclick="startGame()">開始遊戲</button>
+            <div id="install-container" class="hidden" style="margin-top: 15px;">
+                <button class="btn" id="install-btn" style="background-color: #00838f;">📲 安裝到手機桌面</button>
+            </div>
+        </div>
+
+        <!-- 遊戲進行畫面 -->
+        <div id="game-screen" class="hidden">
+            <div class="stats-bar">
+                <span id="progress-text">題號: 1 / 20</span>
+                <span id="score-text">得分: 0</span>
+                <span id="timer-text">時間: 03:00</span>
+            </div>
+
+            <!-- 增加的廣東話與普通話播放按鈕 -->
+            <div class="audio-buttons">
+                <button class="audio-btn" onclick="playAudio('cantonese')" style="background-color: #ab47bc;">🗣️ 廣東話錄音</button>
+                <button class="audio-btn" onclick="playAudio('mandarin')" style="background-color: #ff7043;">🔊 普通話錄音</button>
+            </div>
+            
+            <div class="feedback" id="feedback-icon"></div>
+
+            <div class="options-grid" id="options-container"></div>
+        </div>
+
+        <!-- 結束畫面 -->
+        <div id="end-screen" class="hidden congrats-box">
+            <div class="rabbit-icon">🐇</div>
+            <h1>恭喜通關！</h1>
+            <p id="final-result-text" style="font-size: 1.2rem; color: #333; margin: 15px 0;"></p>
+            <button class="btn" onclick="startGame()">再玩一次</button>
+        </div>
+    </div>
+
+    <script>
+        // PWA Service Worker 離線快取註冊
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swCode = `
+                    self.addEventListener('install', e => {
+                        e.waitUntil(self.skipWaiting());
+                    });
+                    self.addEventListener('activate', e => {
+                        e.waitUntil(self.clients.claim());
+                    });
+                    self.addEventListener('fetch', e => {
+                        e.respondWith(
+                            caches.match(e.request).then(response => {
+                                return response || fetch(e.request);
+                            }).catch(() => {})
+                        );
+                    });
+                `;
+                const blobSW = new Blob([swCode], {type: 'application/javascript'});
+                const swUrl = URL.createObjectURL(blobSW);
+                
+                navigator.serviceWorker.register(swUrl)
+                    .then(() => console.log('PWA 離線功能就緒'))
+                    .catch(err => console.log('PWA 註冊失敗', err));
+            });
+        }
+
+        // 安裝引導 (Android / Chrome)
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('install-container').classList.remove('hidden');
+        });
+
+        document.getElementById('install-btn').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    document.getElementById('install-container').classList.add('hidden');
+                }
+                deferredPrompt = null;
+            }
+        });
+
+        // 語音引擎初始化
+        let systemVoices = [];
+        function loadVoices() {
+            if ('speechSynthesis' in window) {
+                systemVoices = window.speechSynthesis.getVoices();
+            }
+        }
+        loadVoices();
+        if ('speechSynthesis' in window && window.speechSynthesis.onvoiceschanged !== undefined) {
+            window.speechSynthesis.onvoiceschanged = loadVoices;
+        }
+
+        // 支援指定語言播放的函數
+        function playAudio(type) {
+            if (!currentCorrectWord) return;
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                let utterance = new SpeechSynthesisUtterance(currentCorrectWord);
+                
+                let targetVoice = null;
+                if (type === 'cantonese') {
+                    // 尋找廣東話語音包 (zh-HK 或粤语)
+                    targetVoice = systemVoices.find(voice => 
+                        voice.lang === 'zh-HK' || voice.lang === 'yue-Hant-HK' || voice.lang.toLowerCase().includes('cantonese')
+                    );
+                    utterance.lang = 'zh-HK';
+                } else {
+                    // 尋找普通話語音包 (zh-CN / zh-TW / Mandarin)
+                    targetVoice = systemVoices.find(voice => 
+                        voice.lang === 'zh-CN' || voice.lang === 'zh-TW' || voice.lang === 'cmn-CN' || voice.lang.toLowerCase().includes('mandarin')
+                    );
+                    utterance.lang = 'zh-CN';
+                }
+
+                if (targetVoice) {
+                    utterance.voice = targetVoice;
+                }
+                
+                utterance.rate = 0.9;
+                window.speechSynthesis.speak(utterance);
+            }
+        }
+
+        // 20個輕聲詞語庫
+        const wordList = [
+            { word: "莊稼", pinyin: "zhuāng jia" },
+            { word: "雲彩", pinyin: "yún cai" },
+            { word: "帳篷", pinyin: "zhàng peng" },
+            { word: "掃帚", pinyin: "sào zhou" },
+            { word: "扎實", pinyin: "zhā shi" },
+            { word: "招牌", pinyin: "zhāo pai" },
+            { word: "祖宗", pinyin: "zǔ zong" },
+            { word: "告訴", pinyin: "gào su" },
+            { word: "規矩", pinyin: "guī ju" },
+            { word: "窗戶", pinyin: "chuāng hu" },
+            { word: "時候", pinyin: "shí hou" },
+            { word: "喜歡", pinyin: "xǐ huan" },
+            { word: "木匠", pinyin: "mù jiang" },
+            { word: "活潑", pinyin: "huó po" },
+            { word: "知識", pinyin: "zhī shi" },
+            { word: "包袱", pinyin: "bāo fu" },
+            { word: "蒼蠅", pinyin: "cāng ying" },
+            { word: "地道", pinyin: "dì dao" },
+            { word: "東西", pinyin: "dōng xi" },
+            { word: "耳朵", pinyin: "ěr duo" }
+        ];
+
+        const decoyPool = ["花兒", "貓兒", "桌子", "椅子", "石頭", "明白", "蘿蔔", "蘑菇", "乾淨"];
+
+        let currentIndex = 0;
+        let score = 0;
+        let timeLeft = 180;
+        let timerInterval = null;
+        let shuffledQuestions = [];
+        let currentCorrectWord = "";
+        let lockClick = false;
+
+        function startGame() {
+            currentIndex = 0;
+            score = 0;
+            timeLeft = 180;
+            shuffledQuestions = [...wordList].sort(() => Math.random() - 0.5);
+
+            document.getElementById('start-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.add('hidden');
+            document.getElementById('game-screen').classList.remove('hidden');
+
+            updateStats();
+            loadQuestion();
+
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateTimerDisplay();
+                if (timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    endGame(false);
+                }
+            }, 1000);
+        }
+
+        function updateStats() {
+            document.getElementById('progress-text').innerText = `題號: ${currentIndex + 1} / 20`;
+            document.getElementById('score-text').innerText = `得分: ${score}`;
+        }
+
+        function updateTimerDisplay() {
+            let mins = Math.floor(timeLeft / 60);
+            let secs = timeLeft % 60;
+            document.getElementById('timer-text').innerText = `時間: ${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function loadQuestion() {
+            lockClick = false;
+            document.getElementById('feedback-icon').innerText = "";
+            if (currentIndex >= shuffledQuestions.length) {
+                clearInterval(timerInterval);
+                endGame(true);
+                return;
+            }
+
+            updateStats();
+            const currentItem = shuffledQuestions[currentIndex];
+            currentCorrectWord = currentItem.word;
+
+            let options = [currentCorrectWord];
+            while (options.length < 3) {
+                let randomDecoy = decoyPool[Math.floor(Math.random() * decoyPool.length)];
+                if (!options.includes(randomDecoy)) {
+                    options.push(randomDecoy);
+                }
+            }
+            options.sort(() => Math.random() - 0.5);
+
+            const container = document.getElementById('options-container');
+            container.innerHTML = "";
+            options.forEach(opt => {
+                const btn = document.createElement('button');
+                btn.className = 'option-btn';
+                btn.innerText = opt;
+                btn.onclick = () => checkAnswer(opt);
+                container.appendChild(btn);
+            });
+
+            // 預設切換到新題目時自動播放普通話
+            setTimeout(() => playAudio('mandarin'), 300);
+        }
+
+        function checkAnswer(selectedOpt) {
+            if (lockClick) return;
+            lockClick = true;
+
+            const feedback = document.getElementById('feedback-icon');
+
+            if (selectedOpt === currentCorrectWord) {
+                feedback.innerText = "✅";
+                score += 5;
+                updateStats();
+                playAudio('mandarin'); // 答對播放普通話
+                setTimeout(() => {
+                    currentIndex++;
+                    loadQuestion();
+                }, 1200);
+            } else {
+                feedback.innerText = "❌";
+                playAudio('mandarin'); // 答錯重複播放普通話
+                setTimeout(() => {
+                    lockClick = false;
+                    feedback.innerText = "";
+                }, 1500);
+            }
+        }
+
+        function endGame(isCompleted) {
+            document.getElementById('game-screen').classList.add('hidden');
+            document.getElementById('end-screen').classList.remove('hidden');
+            
+            const resultText = document.getElementById('final-result-text');
+            if (isCompleted) {
+                resultText.innerHTML = `太棒了！你在限時內完成了挑戰！<br>最終得分：<strong>${score} 分</strong>`;
+            } else {
+                resultText.innerHTML = `時間到！別氣餒，再試一次吧！<br>最終得分：<strong>${score} 分</strong>`;
+            }
+        }
+    </script>
+</body>
+</html>
